@@ -1,0 +1,79 @@
+﻿@{
+    ViewData["Title"] = "Home Page";
+}
+
+@if (User.Identity.IsAuthenticated)
+{
+    @section Scripts {
+        <script>
+            function sendAjaxRequest(httpMethod, callback, url) {
+                $.ajax(url, {
+                    type: httpMethod,
+                    success: callback
+                });
+            }
+
+            class ChatViewModel {
+                constructor() {
+                    this.contacts = ko.observableArray();
+                    this.selectedContact = ko.observable();
+                }
+
+                getContacts() {
+                    let self = this;
+                    sendAjaxRequest("GET", function (data) {
+                        self.contacts.removeAll();
+                        for (var i = 0; i < data.length; i++) {
+                            self.contacts.push(data[i]);
+                        }
+                    }, "api/chat/contacts");
+                }
+
+                chatWithContact(contact) {
+                    this.selectedContact = contact;
+
+                    if (contact.chatId !== null) {
+                        sendAjaxRequest("GET", function (data) {
+
+                        }, "api/chat/" + contact.chatId);
+                    }
+                }
+            }
+
+            $(document).ready(function () {
+                let model = new ChatViewModel();
+                ko.applyBindings(model);
+                model.getContacts();
+            });
+        </script>
+    }
+
+    <div class="panel-heading">Пользователи онлайн</div>
+    <div class="panel-body">
+        <table class="table table-striped">
+            <thead>
+                <tr><th>Имя пользователя</th><th>Число непрочитанных сообщений</th><th>Пользователь онлайн</th></tr>
+            </thead>
+            <tbody data-bind="foreach: contacts">
+                <tr>
+                    <td>
+                        <a href="#" data-bind="click: $root.chatWithUser">
+                            <strong data-bind="text: userName"></strong>
+                        </a>
+                    </td>
+                    <td data-bind="text: unreadMessagesCount"></td>
+                    <td data-bind="text: isOnline"></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <form method="post" asp-controller="Account" asp-action="Logout">
+        <input type="submit" value="Выход" />
+    </form>
+}
+else
+{
+    <a asp-controller="Account" asp-action="Login">Вход</a>
+    <a asp-controller="Account" asp-action="Register">Регистрация</a>
+}
