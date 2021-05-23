@@ -9,5 +9,9 @@ namespace WebChatMvc.Extensions
         {
             return user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value;
         }
+        public static string GetUserName(this ClaimsPrincipal user)
+        {
+            return user.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value;
+        }
     }
 }

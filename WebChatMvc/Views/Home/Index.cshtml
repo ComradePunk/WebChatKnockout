@@ -6,44 +6,140 @@
 {
     @section Scripts {
         <script>
-            function sendAjaxRequest(httpMethod, callback, url) {
+
+            function sendAjaxRequest(httpMethod, callback, url, data = null) {
                 $.ajax(url, {
                     type: httpMethod,
+                    data: data == null ? null : JSON.stringify(data),
+                    dataType: "json",
+                    contentType: "application/json",
                     success: callback
                 });
             }
 
             class ChatViewModel {
                 constructor() {
-                    this.contacts = ko.observableArray();
-                    this.selectedContact = ko.observable();
+                    let self = this;
+
+                    this.onlineUsers = ko.observableArray();
+
+                    this.chats = ko.observableArray();
+                    this.chatsByIds = {};
+                    this.selectedChatId = ko.observable(null);
+
+                    this.messages = ko.observableArray();
+                    this.messagesByIds = {};
+
+                    this.message = ko.observable('');
+
+                    this.connection = new signalR.HubConnectionBuilder().withUrl("/webChatHub").build();
+                    this.connection.on("ReceiveMessage", function (message) {
+                        if (message === null)
+                            return;
+
+                        if (self.selectedChatId() !== message.chatId) {
+                            let changedChat = self.chatsByIds[message.chatId];
+                            changedChat().unreadMessagesCount++;
+                            changedChat.valueHasMutated();
+                        }
+                        else {
+                            message = ko.observable(message);
+                            self.messages.push(message);
+                            self.messagesByIds[message().id] = message;
+                        }
+                    });
+
+                    this.connection.on("MessageRead", function (messageId) {
+                        if (!self.messagesByIds.hasOwnProperty(messageId))
+                            return;
+
+                        let message = self.messagesByIds[messageId];
+                        if (message().isRead)
+                            return;
+
+                        message().isRead = true;
+                        message.valueHasMutated();
+                        let changedChat = self.chatsByIds[self.selectedChatId()];
+                        changedChat().unreadMessagesCount--;
+                        changedChat.valueHasMutated();
+                    });
+
+                    this.connection.start();
                 }
 
-                getContacts() {
+                getOnlineUsers() {
                     let self = this;
                     sendAjaxRequest("GET", function (data) {
-                        self.contacts.removeAll();
-                        for (var i = 0; i < data.length; i++) {
-                            self.contacts.push(data[i]);
+                        self.onlineUsers.removeAll();
+                        for (let i = 0; i < data.length; i++) {
+                            self.onlineUsers.push(data[i]);
                         }
-                    }, "api/chat/contacts");
+                    }, "api/chat/usersOnline");
                 }
 
-                chatWithContact(contact) {
-                    this.selectedContact = contact;
+                getChats() {
+                    let self = this;
+                    sendAjaxRequest("GET", function (data) {
+                        self.chats.removeAll();
+                        for (let i = 0; i < data.length; i++) {
+                            let chat = ko.observable(data[i]);
+                            self.chatsByIds[chat().id] = chat;
+                            self.chats.push(chat);
+                        }
+                    }, "api/chat");
+                }
 
-                    if (contact.chatId !== null) {
-                        sendAjaxRequest("GET", function (data) {
+                createChat(root, user) {
+                    sendAjaxRequest("POST", function (data) {
+                        if (!root.chatsByIds.hasOwnProperty(data.id)) {
+                            let chat = ko.observable(data);
+                            root.chatsByIds[data.id] = chat;
+                            root.chats.unshift(chat);
+                            root.selectedChatId(data.id);
+                        }
+                        else {
+                            root.openChat(root, root.chatsByIds[data.id]);
+                        }
+                    }, "api/chat/" + user.id);
+                }
 
-                        }, "api/chat/" + contact.chatId);
-                    }
+                readMessage(message) {
+                    if (!message().isRead)
+                        this.connection.invoke("ReadMessage", message().id);
+                }
+
+                openChat(root, chat) {
+                    if (!ko.isObservable(chat))
+                        chat = root.chatsByIds[chat.id];
+
+                    if (root.selectedChatId() !== null && root.selectedChatId() === chat().id)
+                        return;
+
+                    root.messages.removeAll();
+                    root.selectedChatId(chat().id);
+
+                    sendAjaxRequest("GET", function (data) {
+                        for (let i = 0; i < data.items.length; i++) {
+                            let message = ko.observable(data.items[i]);
+                            root.messages.unshift(message);
+                            root.messagesByIds[message().id] = message;
+                            root.readMessage(message);
+                        }
+                    }, "api/chat/messages/" + chat().id);
+                }
+
+                sendMessage() {
+                    this.connection.invoke("SendMessage", { chatId: this.selectedChatId(), text: this.message() });
+                    this.message('');
                 }
             }
 
             $(document).ready(function () {
                 let model = new ChatViewModel();
                 ko.applyBindings(model);
-                model.getContacts();
+
+                model.getOnlineUsers();
+                model.getChats();
             });
         </script>
     }
@@ -51,22 +147,50 @@
     <div class="panel-heading">Пользователи онлайн</div>
     <div class="panel-body">
         <table class="table table-striped">
+            <thead><tr><th>Id пользователя</th><th>Имя пользователя</th></tr></thead>
+            <tbody data-bind="foreach: onlineUsers">
+                <tr data-bind="click: $root.createChat.bind($data, $root)">
+                    <td data-bind="text: id"></td>
+                    <td data-bind="text: userName"></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="panel-heading">Чаты</div>
+    <div class="panel-body">
+        <table class="table table-striped">
             <thead>
-                <tr><th>Имя пользователя</th><th>Число непрочитанных сообщений</th><th>Пользователь онлайн</th></tr>
+                <tr><th>Имя чата</th><th>Число непрочитанных сообщений</th><th>Есть пользователи онлайн</th></tr>
             </thead>
-            <tbody data-bind="foreach: contacts">
-                <tr>
-                    <td>
-                        <a href="#" data-bind="click: $root.chatWithUser">
-                            <strong data-bind="text: userName"></strong>
-                        </a>
-                    </td>
+            <tbody data-bind="foreach: chats">
+                <tr data-bind="click: $root.openChat.bind($data, $root)">
+                    <td data-bind="text: name"></td>
                     <td data-bind="text: unreadMessagesCount"></td>
                     <td data-bind="text: isOnline"></td>
                 </tr>
             </tbody>
         </table>
     </div>
+
+    <div class="panel-heading" data-bind="visible: selectedChatId() !== null">Сообщения</div>
+    <div class="panel-body" data-bind="visible: selectedChatId() !== null">
+        <table class="table table-striped">
+            <thead><tr><th>Sender Name</th><th>Text</th><th>Sent time</th><th>Is read</th></tr></thead>
+            <tbody data-bind="foreach: messages">
+                <tr>
+                    <td data-bind="text: senderName"></td>
+                    <td data-bind="text: text"></td>
+                    <td data-bind="text: sentTime"></td>
+                    <td data-bind="text: isRead"></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+
+    <input data-bind="visible: selectedChatId() !== null, value: message"/>
+    <button data-bind="visible: selectedChatId() !== null, enable: message() !== '', click: sendMessage">Отправить сообщение</button>
 
     <form method="post" asp-controller="Account" asp-action="Logout">
         <input type="submit" value="Выход" />
