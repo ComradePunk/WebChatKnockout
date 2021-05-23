@@ -22,6 +22,7 @@
                     let self = this;
 
                     this.onlineUsers = ko.observableArray();
+                    this.onlineUsersByIds = {};
 
                     this.chats = ko.observableArray();
                     this.chatsByIds = {};
@@ -33,19 +34,22 @@
                     this.message = ko.observable('');
 
                     this.connection = new signalR.HubConnectionBuilder().withUrl("/webChatHub").build();
+
                     this.connection.on("ReceiveMessage", function (message) {
                         if (message === null)
                             return;
 
-                        if (self.selectedChatId() !== message.chatId) {
+                        if (!message.isRead) {
                             let changedChat = self.chatsByIds[message.chatId];
                             changedChat().unreadMessagesCount++;
                             changedChat.valueHasMutated();
                         }
-                        else {
+
+                        if (self.selectedChatId() === message.chatId) {
                             message = ko.observable(message);
                             self.messages.push(message);
                             self.messagesByIds[message().id] = message;
+                            self.readMessage(message);
                         }
                     });
 
@@ -64,6 +68,40 @@
                         changedChat.valueHasMutated();
                     });
 
+                    this.connection.on("ChatCreated", function (chat) {
+                        if (!self.chatsByIds.hasOwnProperty(chat.id)) {
+                            chat = ko.observable(chat);
+                            self.chatsByIds[chat().id] = chat;
+                            self.chats.unshift(chat);
+                            self.selectedChatId(chat().id);
+                        }
+                        else {
+                            self.openChat(self, self.chatsByIds[chat.id]);
+                        }
+                    });
+
+                    this.connection.on("UserLoggedIn", function (user) {
+                        if (self.onlineUsersByIds.hasOwnProperty(user.id))
+                            return;
+
+                        self.onlineUsersByIds[user.id] = user;
+                        self.onlineUsers.unshift(user);
+                    });
+
+                    this.connection.on("UserLoggedOut", function (user) {
+                        if (!self.onlineUsersByIds.hasOwnProperty(user.id))
+                            return;
+
+                        for (let i = 0; i < self.onlineUsers().length; i++) {
+                            if (self.onlineUsers()[i].id === user.id) {
+                                self.onlineUsers().splice(i, 1);
+                                break;
+                            }
+                        }
+                        delete self.onlineUsersByIds[user.id];
+                        self.onlineUsers.valueHasMutated();
+                    })
+
                     this.connection.start();
                 }
 
@@ -71,10 +109,13 @@
                     let self = this;
                     sendAjaxRequest("GET", function (data) {
                         self.onlineUsers.removeAll();
+                        self.onlineUsersByIds = {};
                         for (let i = 0; i < data.length; i++) {
-                            self.onlineUsers.push(data[i]);
+                            let user = data[i];
+                            self.onlineUsers.push(user);
+                            self.onlineUsersByIds[user.id] = user;
                         }
-                    }, "api/chat/usersOnline");
+                    }, "api/users/online");
                 }
 
                 getChats() {
@@ -90,17 +131,7 @@
                 }
 
                 createChat(root, user) {
-                    sendAjaxRequest("POST", function (data) {
-                        if (!root.chatsByIds.hasOwnProperty(data.id)) {
-                            let chat = ko.observable(data);
-                            root.chatsByIds[data.id] = chat;
-                            root.chats.unshift(chat);
-                            root.selectedChatId(data.id);
-                        }
-                        else {
-                            root.openChat(root, root.chatsByIds[data.id]);
-                        }
-                    }, "api/chat/" + user.id);
+                    root.connection.invoke("CreateChat", user);
                 }
 
                 readMessage(message) {
@@ -125,7 +156,7 @@
                             root.messagesByIds[message().id] = message;
                             root.readMessage(message);
                         }
-                    }, "api/chat/messages/" + chat().id);
+                    }, "api/messages/" + chat().id);
                 }
 
                 sendMessage() {

@@ -1,4 +1,5 @@
 using Application;
+using Application.Contracts;
 using Application.Services;
 using Domain;
 using Domain.Entities;
@@ -11,6 +12,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System;
+using System.Linq;
+using WebChatMvc.HostedServices;
 using WebChatMvc.Hubs;
 using WebChatMvc.Services;
 
@@ -44,10 +47,14 @@ namespace WebChatMvc
 
             services.AddAutoMapper(typeof(AutoMapperProfile));
 
-            services.AddScoped<ChatService>();
+            var serviceInterface = typeof(IScopedService);
+            foreach (var serviceType in serviceInterface.Assembly.GetTypes().Where(type => serviceInterface.IsAssignableFrom(type) && serviceInterface != type))
+                services.AddScoped(serviceType);
 
             services.AddControllersWithViews();
             services.AddSignalR();
+
+            services.AddHostedService<UserStateHostedService>();
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
