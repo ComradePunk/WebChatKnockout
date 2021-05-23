@@ -15,6 +15,7 @@ namespace Domain.Configurations
             builder.Property(m => m.SentTime).HasDefaultValueSql("SYSDATETIMEOFFSET()");
 
             builder.HasIndex(m => m.SentTime);
+            builder.HasIndex(m => m.ChatId);
 
             builder.HasOne(m => m.Chat).WithMany(c => c.Messages).HasForeignKey(m => m.ChatId).OnDelete(DeleteBehavior.Restrict);
             builder.HasOne(m => m.Sender).WithMany(u => u.Messages).HasForeignKey(m => m.SenderId).OnDelete(DeleteBehavior.Restrict);

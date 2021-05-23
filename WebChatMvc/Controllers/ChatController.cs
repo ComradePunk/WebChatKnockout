@@ -1,11 +1,12 @@
-﻿using Application.Services;
+﻿using Application.Models;
+using Application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using System;
-using System.Linq;
-using System.Security.Claims;
 using System.Threading.Tasks;
 using WebChatMvc.Extensions;
+using WebChatMvc.Hubs;
 
 namespace WebChatMvc.Controllers
 {
@@ -24,17 +25,45 @@ namespace WebChatMvc.Controllers
         [HttpGet("usersOnline")]
         public async Task<IActionResult> OnlineUsers()
         {
-            return Ok(await _service.GetOnlineUsers());
+            var idStr = HttpContext.User.GetUserId();
+            if (!string.IsNullOrWhiteSpace(idStr) && Guid.TryParse(idStr, out var id))
+                return Ok(await _service.GetOnlineUsers(id));
+
+            return Unauthorized();
         }
 
-        [HttpGet("contacts")]
-        public async Task<IActionResult> Contacts()
+        [HttpGet]
+        public async Task<IActionResult> Chats()
         {
             var idStr = HttpContext.User.GetUserId();
             if (!string.IsNullOrWhiteSpace(idStr) && Guid.TryParse(idStr, out var id))
-                return Ok(await _service.GetWebChatContacts(id));
+                return Ok(await _service.GetWebChats(id));
 
-            return BadRequest();
+            return Unauthorized();
+        }
+
+        [HttpGet("messages/{chatId}")]
+        public async Task<IActionResult> Messages(int chatId, [FromQuery] int? pageNumber, [FromQuery] int? pageSize)
+        {
+            var idStr = HttpContext.User.GetUserId();
+            if (!string.IsNullOrWhiteSpace(idStr) && Guid.TryParse(idStr, out var id))
+            {
+                return Ok(await _service.GetMessages(chatId, id, pageNumber, pageSize));
+            }
+
+            return Unauthorized();
+        }
+
+        [HttpPost("{userId}")]
+        public async Task<IActionResult> CreateChat(Guid userId)
+        {
+            var idStr = HttpContext.User.GetUserId();
+            if (!string.IsNullOrWhiteSpace(idStr) && Guid.TryParse(idStr, out var id))
+            {
+                return Ok(await _service.CreateChat(id, userId));
+            }
+
+            return Unauthorized();
         }
     }
 }
