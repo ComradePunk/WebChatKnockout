@@ -8,23 +8,23 @@ using WebChatMvc.Extensions;
 namespace WebChatMvc.Controllers
 {
     [Authorize]
-    [Route("api/chat"), Produces("application/json")]
+    [Route("api/users"), Produces("application/json")]
     [ApiController]
-    public class ChatController : ControllerBase
+    public class UsersController : ControllerBase
     {
-        private readonly ChatService _chatService;
+        private readonly UserService _userService;
 
-        public ChatController(ChatService service)
+        public UsersController(UserService userService)
         {
-            _chatService = service;
+            _userService = userService;
         }
 
-        [HttpGet]
-        public async Task<IActionResult> Chats()
+        [HttpGet("online")]
+        public async Task<IActionResult> OnlineUsers()
         {
             var idStr = HttpContext.User.GetUserId();
             if (!string.IsNullOrWhiteSpace(idStr) && Guid.TryParse(idStr, out var id))
-                return Ok(await _chatService.GetWebChats(id));
+                return Ok(await _userService.GetOnlineUsers(id));
 
             return Unauthorized();
         }

@@ -1,8 +1,11 @@
 ﻿using Application.Models;
 using Application.Services;
 using AutoMapper;
+using Domain;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
@@ -22,6 +25,30 @@ namespace WebChatMvc.Hubs
             _serviceProvider = serviceProvider;
         }
 
+        private async Task RenewAuthenticationTicket(IServiceScope scope)
+        {
+            var context = scope.ServiceProvider.GetRequiredService<WebChatContext>();
+            var now = DateTimeOffset.Now;
+            var idStr = Context.User.GetUserId();
+            if (string.IsNullOrWhiteSpace(idStr) || !Guid.TryParse(idStr, out var userId))
+                return;
+
+            var authenticationTickets = await context.AuthenticationTickets.Where(t => t.UserId == userId && t.Expires >= now).ToListAsync();
+
+            var ticketStore = scope.ServiceProvider.GetService<ITicketStore>();
+
+            foreach (var authenticationTicket in authenticationTickets)
+            {
+                var ticket = authenticationTicket.Value.DeserializeAuthenticationTicket();
+                if (ticket == null)
+                    continue;
+
+                if (ticket.Properties.ExpiresUtc.HasValue)
+                    ticket.Properties.ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(5);
+                await ticketStore.RenewAsync(authenticationTicket.Id.ToString("D"), ticket);
+            }
+        }
+
         public async Task SendMessage(SendMessageModel messageModel)
         {
             var senderIdStr = Context.User.GetUserId();
@@ -33,9 +60,12 @@ namespace WebChatMvc.Hubs
 
             using (var scope = _serviceProvider.CreateScope())
             {
+                await RenewAuthenticationTicket(scope);
                 var chatService = scope.ServiceProvider.GetService<ChatService>();
+                var messageService = scope.ServiceProvider.GetService<MessageService>();
+
                 var mapper = scope.ServiceProvider.GetService<IMapper>();
-                var message = await chatService.SendMessage(messageModel);
+                var message = await messageService.SendMessage(messageModel);
                 if (message == null)
                     return;
 
@@ -59,9 +89,32 @@ namespace WebChatMvc.Hubs
 
             using (var scope = _serviceProvider.CreateScope())
             {
-                var chatService = scope.ServiceProvider.GetService<ChatService>();
-                await chatService.ReadMessage(id, messageId);
+                await RenewAuthenticationTicket(scope);
+                var messageService = scope.ServiceProvider.GetService<MessageService>();
+                await messageService.ReadMessage(id, messageId);
                 await Clients.User(idStr).SendAsync("MessageRead", messageId);
+            }
+        }
+
+        public async Task CreateChat(WebChatUserViewModel user)
+        {
+            var idStr = Context.User.GetUserId();
+            if (string.IsNullOrWhiteSpace(idStr) || !Guid.TryParse(idStr, out var id))
+                return;
+
+            using (var scope = _serviceProvider.CreateScope())
+            {
+                await RenewAuthenticationTicket(scope);
+                var chatService = scope.ServiceProvider.GetService<ChatService>();
+
+                var me = new WebChatUserViewModel { Id = id, UserName = Context.User.GetUserName() };
+                var chat = await chatService.CreateChat(me, user);
+
+                chat.Name = user.UserName;
+                await Clients.User(idStr).SendAsync("ChatCreated", chat);
+
+                chat.Name = me.UserName;
+                await Clients.User(user.Id.ToString("D")).SendAsync("ChatCreated", chat);
             }
         }
     }

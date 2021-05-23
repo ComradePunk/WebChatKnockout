@@ -19,12 +19,6 @@ namespace WebChatMvc.Services
             _serviceProvider = serviceProvider;
         }
 
-        private byte[] SerializeToBytes(AuthenticationTicket source)
-            => TicketSerializer.Default.Serialize(source);
-
-        private AuthenticationTicket DeserializeFromBytes(byte[] source)
-            => source == null ? null : TicketSerializer.Default.Deserialize(source);
-
         public async Task RemoveAsync(string key)
         {
             if (!Guid.TryParse(key, out var id))
@@ -56,7 +50,7 @@ namespace WebChatMvc.Services
                 if (authenticationTicket == null)
                     return;
 
-                authenticationTicket.Value = SerializeToBytes(ticket);
+                authenticationTicket.Value = ticket.SerializeToBytes();
                 authenticationTicket.LastActivity = DateTimeOffset.UtcNow;
                 authenticationTicket.Expires = ticket.Properties.ExpiresUtc;
                 await context.SaveChangesAsync();
@@ -78,7 +72,7 @@ namespace WebChatMvc.Services
                 authenticationTicket.LastActivity = DateTimeOffset.UtcNow;
                 await context.SaveChangesAsync();
 
-                return DeserializeFromBytes(authenticationTicket.Value);
+                return authenticationTicket.Value.DeserializeAuthenticationTicket();
             }
         }
 
@@ -98,7 +92,7 @@ namespace WebChatMvc.Services
                 var authenticationTicket = new WebChatAuthenticationTicket
                 {
                     UserId = userId,
-                    Value = SerializeToBytes(ticket),
+                    Value = ticket.SerializeToBytes(),
                     LastActivity = DateTimeOffset.UtcNow,
                     Expires = ticket.Properties.ExpiresUtc
                 };
