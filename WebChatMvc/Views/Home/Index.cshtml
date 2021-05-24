@@ -17,9 +17,25 @@
                 });
             }
 
+            const MessageSent = "Sent";
+            const MessageReceived = "Received";
+            const MessageRead = "Read";
+
+            class MessageListViewModel {
+                constructor() {
+                    this.chatScrollRelativePosition = 0;
+                    this.requestIsRunning = false;
+                    this.window = document.getElementById("messageUnorderedList");
+                    this.messages = ko.observableArray();
+                    this.messagesByIds = {};
+                }
+            }
+
             class ChatViewModel {
                 constructor() {
                     let self = this;
+
+                    this.currentUser = { id: ko.observable(), userName: ko.observable() };
 
                     this.onlineUsers = ko.observableArray();
                     this.onlineUsersByIds = {};
@@ -28,8 +44,7 @@
                     this.chatsByIds = {};
                     this.selectedChatId = ko.observable(null);
 
-                    this.messages = ko.observableArray();
-                    this.messagesByIds = {};
+                    this.messageList = new MessageListViewModel();
 
                     this.message = ko.observable('');
 
@@ -39,44 +54,69 @@
                         if (message === null)
                             return;
 
-                        if (!message.isRead) {
-                            let changedChat = self.chatsByIds[message.chatId];
-                            changedChat().unreadMessagesCount++;
-                            changedChat.valueHasMutated();
-                        }
+                        message = ko.observable(message);
 
-                        if (self.selectedChatId() === message.chatId) {
-                            message = ko.observable(message);
-                            self.messages.push(message);
-                            self.messagesByIds[message().id] = message;
-                            self.readMessage(message);
+                        if (self.selectedChatId() === message().chatId) {
+                            self.messageList.messages.push(message);
+                            self.messageList.messagesByIds[message().id] = message;
+                            self.scrollToBottom(self);
+                            if (message().senderId != self.currentUser.id()) {
+                                self.addUnreadMessagesToChat(self, message().chatId, 1);
+                                self.readMessage(self, message);
+                            }
                         }
+                        else if (message().senderId !== self.currentUser.id()) {
+                            switch (message().status) {
+                                case MessageSent:
+                                    self.addUnreadMessagesToChat(self, message().chatId, 1);
+                                    self.connection.invoke("MessageRecepientGotMessage", message().id);
+                                    break;
+
+                                case MessageReceived:
+                                    self.addUnreadMessagesToChat(self, message().chatId, 1);
+                                    break;
+                            }
+                        }
+                    });
+
+                    this.connection.on("MessageReceived", function (messageId) {
+                        if (!self.messageList.messagesByIds.hasOwnProperty(messageId))
+                            return;
+
+                        let message = self.messageList.messagesByIds[messageId];
+                        if (message().status !== MessageSent)
+                            return;
+
+                        message().status = MessageReceived;
+                        message.valueHasMutated();
                     });
 
                     this.connection.on("MessageRead", function (messageId) {
-                        if (!self.messagesByIds.hasOwnProperty(messageId))
+                        if (!self.messageList.messagesByIds.hasOwnProperty(messageId))
                             return;
 
-                        let message = self.messagesByIds[messageId];
-                        if (message().isRead)
+                        let message = self.messageList.messagesByIds[messageId];
+                        if (message().status === MessageRead)
                             return;
 
-                        message().isRead = true;
+                        message().status = MessageRead;
                         message.valueHasMutated();
-                        let changedChat = self.chatsByIds[self.selectedChatId()];
-                        changedChat().unreadMessagesCount--;
-                        changedChat.valueHasMutated();
+
+                        if (message().senderId === self.currentUser.id())
+                            return;
+
+                        self.addUnreadMessagesToChat(self, self.selectedChatId(), -1);
                     });
 
                     this.connection.on("ChatCreated", function (chat) {
-                        if (!self.chatsByIds.hasOwnProperty(chat.id)) {
-                            chat = ko.observable(chat);
+                        chat = ko.observable(chat);
+                        if (!self.chatsByIds.hasOwnProperty(chat().id)) {
                             self.chatsByIds[chat().id] = chat;
                             self.chats.unshift(chat);
                             self.selectedChatId(chat().id);
                         }
                         else {
-                            self.openChat(self, self.chatsByIds[chat.id]);
+                            self.openChat(self, self.chatsByIds[chat().id]);
                         }
                     });
 
@@ -103,6 +143,20 @@
                     })
 
                     this.connection.start();
+                }
+
+                addUnreadMessagesToChat(self, chatId, count) {
+                    let changedChat = self.chatsByIds[chatId];
+                    changedChat().unreadMessagesCount += count;
+                    changedChat.valueHasMutated();
+                }
+
+                getCurrentUser() {
+                    let self = this;
+                    sendAjaxRequest("GET", function (data) {
+                        self.currentUser.id(data.id);
+                        self.currentUser.userName(data.userName);
+                    }, "api/users/currentUser");
                 }
 
                 getOnlineUsers() {
@@ -134,9 +188,25 @@
                     root.connection.invoke("CreateChat", user);
                 }
 
-                readMessage(message) {
-                    if (!message().isRead)
+                readMessage(root, message) {
+                    if (message().status !== MessageRead && message().senderId != root.currentUser.id())
                         this.connection.invoke("ReadMessage", message().id);
+                }
+
+                insertNewMessages(root, messages) {
+                    for (let i = 0; i < messages.items.length; i++) {
+                        let message = ko.observable(messages.items[i]);
+                        if (root.messageList.messagesByIds.hasOwnProperty(message().id))
+                            continue;
+
+                        root.messageList.messages.unshift(message);
+                        root.messageList.messagesByIds[message().id] = message;
+                        root.readMessage(root, message);
+                    }
+                }
+
+                scrollToBottom(root) {
+                    root.messageList.window.scrollTop = root.messageList.window.scrollHeight;
                 }
 
                 openChat(root, chat) {
@@ -146,22 +216,53 @@
                     if (root.selectedChatId() !== null && root.selectedChatId() === chat().id)
                         return;
 
-                    root.messages.removeAll();
+                    root.messageList.messages.removeAll();
+                    root.messageList.messagesByIds = {};
                     root.selectedChatId(chat().id);
 
                     sendAjaxRequest("GET", function (data) {
-                        for (let i = 0; i < data.items.length; i++) {
-                            let message = ko.observable(data.items[i]);
-                            root.messages.unshift(message);
-                            root.messagesByIds[message().id] = message;
-                            root.readMessage(message);
-                        }
-                    }, "api/messages/" + chat().id);
+                        root.insertNewMessages(root, data);
+                        root.scrollToBottom(root);
+                    }, "api/messages/" + chat().id + "?pageNumber=1&pageSize=10");
+                }
+
+                requestOlderMessages(root) {
+                    if (root.messageList.requestIsRunning)
+                        return;
+
+                    root.messageList.requestIsRunning = true;
+
+                    let messagesPerPage = 10;
+                    let messagesCount = root.messageList.messages().length;
+                    let currentPage = Math.floor(messagesCount / messagesPerPage);
+                    let nextPage = currentPage + 1;
+
+                    sendAjaxRequest("GET", function (data) {
+                        root.insertNewMessages(root, data);
+                        root.messageList.requestIsRunning = false;
+                        let newMessagesCount = root.messageList.messages().length;
+                        if (newMessagesCount == messagesCount)
+                            return;
+
+                        root.messageList.chatScrollRelativePosition = 1;
+                        root.messageList.window.scrollTop = (1.0 - currentPage / nextPage) * root.messageList.window.scrollHeight;
+                    }, "api/messages/" + root.selectedChatId() + "?pageNumber=" + nextPage + "&pageSize=" + messagesPerPage);
                 }
 
                 sendMessage() {
                     this.connection.invoke("SendMessage", { chatId: this.selectedChatId(), text: this.message() });
                     this.message('');
+                }
+
+                messagesScrolled(root, event) {
+                    let element = event.target;
+                    let relativePosition = element.scrollTop / element.scrollHeight;
+                    let needRequestOlderMessages = relativePosition < root.messageList.chatScrollRelativePosition && relativePosition <= 0.1;
+
+                    root.messageList.chatScrollRelativePosition = relativePosition;
+
+                    if (needRequestOlderMessages)
+                        root.requestOlderMessages(root);
                 }
             }
 
@@ -169,63 +270,65 @@
                 let model = new ChatViewModel();
                 ko.applyBindings(model);
 
+                model.getCurrentUser();
                 model.getOnlineUsers();
                 model.getChats();
             });
         </script>
     }
 
-    <div class="panel-heading">Пользователи онлайн</div>
-    <div class="panel-body">
-        <table class="table table-striped">
-            <thead><tr><th>Id пользователя</th><th>Имя пользователя</th></tr></thead>
-            <tbody data-bind="foreach: onlineUsers">
-                <tr data-bind="click: $root.createChat.bind($data, $root)">
-                    <td data-bind="text: id"></td>
-                    <td data-bind="text: userName"></td>
-                </tr>
-            </tbody>
-        </table>
+    <div class="d-flex justify-content-end">
+        <h3 data-bind="text: currentUser.userName"></h3>
+        <form class="mx-3" method="post" asp-controller="Account" asp-action="Logout">
+            <input class="border-0 px-4 py-2 rounded font-weight-bold" style="background-color: dodgerblue; color: white" type="submit" value="Выход" />
+        </form>
+    </div>
+    <div class="d-flex flex-row" style="height: 65vh">
+        <div class="d-flex flex-column w-25">
+            <div class="m-3 overflow-auto" style="height: 40%">
+                <h3>Пользователи</h3>
+                <ul data-bind="foreach: onlineUsers" class="p-0 m-0" style="list-style-type: none;">
+                    <li data-bind="click: $root.createChat.bind($data, $root)">
+                        <span data-bind="text: userName"></span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="m-3 overflow-auto" style="height: 60%">
+                <h3>Чаты</h3>
+                <ul data-bind="foreach: chats" class="p-0 m-0" style="list-style-type: none;">
+                    <li data-bind="click: $root.openChat.bind($data, $root)">
+                        <span data-bind="text: name"></span>
+                        <span data-bind="text: unreadMessagesCount"></span>
+                        <span data-bind="text: isOnline"></span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="d-flex flex-column w-75">
+            <div class="m-3 h-75" data-bind="visible: selectedChatId() !== null">
+                <h3 class="h-auto">Сообщения</h3>
+                <ul id="messageUnorderedList" data-bind="foreach: messageList.messages, event: { scroll: messagesScrolled }" class="p-0 m-0 overflow-auto" style="height: 90%; list-style-type: none;">
+                    <li class="mb-3">
+                        <div class="d-flex flex-row justify-content-between">
+                            <span class="font-weight-bold" data-bind="text: senderName"></span>
+                            <span data-bind="text: moment(sentTime).format('DD.MM.yyyy hh:mm')"></span>
+                        </div>
+                        <div class="d-flex flex-row justify-content-between">
+                            <span class="font-italic" data-bind="text: text"></span>
+                            <span data-bind="text: status"></span>
+                        </div>
+                    </li>
+                </ul>
+            </div>
+            <div class="w-100 d-flex h-auto my-2">
+                <textarea class="h-auto mr-1" style="width:93%" data-bind="visible: selectedChatId() !== null, textInput: message"> </textarea>
+                <button class="h-100 border-0 p-3 rounded font-weight-bold" style="width: 5%; background-color: dodgerblue; color: white" data-bind="visible: selectedChatId() !== null, enable: message() !== '', click: sendMessage">&gt;</button>
+            </div>
+        </div>
     </div>
 
-    <div class="panel-heading">Чаты</div>
-    <div class="panel-body">
-        <table class="table table-striped">
-            <thead>
-                <tr><th>Имя чата</th><th>Число непрочитанных сообщений</th><th>Есть пользователи онлайн</th></tr>
-            </thead>
-            <tbody data-bind="foreach: chats">
-                <tr data-bind="click: $root.openChat.bind($data, $root)">
-                    <td data-bind="text: name"></td>
-                    <td data-bind="text: unreadMessagesCount"></td>
-                    <td data-bind="text: isOnline"></td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="panel-heading" data-bind="visible: selectedChatId() !== null">Сообщения</div>
-    <div class="panel-body" data-bind="visible: selectedChatId() !== null">
-        <table class="table table-striped">
-            <thead><tr><th>Sender Name</th><th>Text</th><th>Sent time</th><th>Is read</th></tr></thead>
-            <tbody data-bind="foreach: messages">
-                <tr>
-                    <td data-bind="text: senderName"></td>
-                    <td data-bind="text: text"></td>
-                    <td data-bind="text: sentTime"></td>
-                    <td data-bind="text: isRead"></td>
-                </tr>
-            </tbody>
-        </table>
-    </div>
-
-
-    <input data-bind="visible: selectedChatId() !== null, value: message"/>
-    <button data-bind="visible: selectedChatId() !== null, enable: message() !== '', click: sendMessage">Отправить сообщение</button>
-
-    <form method="post" asp-controller="Account" asp-action="Logout">
-        <input type="submit" value="Выход" />
-    </form>
 }
 else
 {
