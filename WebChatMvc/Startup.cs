@@ -13,6 +13,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System;
 using System.Linq;
+using System.Text.Json.Serialization;
 using WebChatMvc.HostedServices;
 using WebChatMvc.Hubs;
 using WebChatMvc.Services;
@@ -51,8 +52,15 @@ namespace WebChatMvc
             foreach (var serviceType in serviceInterface.Assembly.GetTypes().Where(type => serviceInterface.IsAssignableFrom(type) && serviceInterface != type))
                 services.AddScoped(serviceType);
 
-            services.AddControllersWithViews();
-            services.AddSignalR();
+            var jsonSerializer = new JsonStringEnumConverter();
+
+            services.AddControllersWithViews()
+                .AddJsonOptions(options =>
+                {
+                    options.JsonSerializerOptions.Converters.Add(jsonSerializer);
+                });
+
+            services.AddSignalR().AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(jsonSerializer));
 
             services.AddHostedService<UserStateHostedService>();
         }

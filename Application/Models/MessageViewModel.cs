@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Application.Enums;
+using System;
 
 namespace Application.Models
 {
@@ -10,6 +11,6 @@ namespace Application.Models
         public string SenderName { get; set; }
         public string Text { get; set; }
         public DateTimeOffset SentTime { get; set; }
-        public bool IsRead { get; set; }
+        public MessageStatus Status { get; set; }
     }
 }

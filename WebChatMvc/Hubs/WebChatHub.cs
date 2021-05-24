@@ -74,10 +74,27 @@ namespace WebChatMvc.Hubs
                 var tasks = new List<Task>(ids.Count);
                 foreach(var id in ids)
                 {
-                    message.IsRead = message.SenderId == id;
-                    tasks.Add(Clients.User(id.ToString("D")).SendAsync("ReceiveMessage", mapper.Map<MessageViewModel>(message)));
+                    tasks.Add(Clients.User(id.ToString("D")).SendAsync("ReceiveMessage", message));
                 }
                 await Task.WhenAll(tasks);
+            }
+        }
+
+        public async Task MessageRecepientGotMessage(int messageId)
+        {
+            var idStr = Context.User.GetUserId();
+            if (string.IsNullOrWhiteSpace(idStr) || !Guid.TryParse(idStr, out var id))
+                return;
+
+            using (var scope = _serviceProvider.CreateScope())
+            {
+                await RenewAuthenticationTicket(scope);
+                var messageService = scope.ServiceProvider.GetService<MessageService>();
+                await messageService.ReceiveMessage(id, messageId);
+
+                var message = await messageService.GetMessageById(messageId);
+                await Clients.User(message.SenderId.ToString("D")).SendAsync("MessageReceived", messageId);
+                await Clients.User(idStr).SendAsync("MessageReceived", messageId);
             }
         }
 
@@ -92,6 +109,9 @@ namespace WebChatMvc.Hubs
                 await RenewAuthenticationTicket(scope);
                 var messageService = scope.ServiceProvider.GetService<MessageService>();
                 await messageService.ReadMessage(id, messageId);
+
+                var message = await messageService.GetMessageById(messageId);
+                await Clients.User(message.SenderId.ToString("D")).SendAsync("MessageRead", messageId);
                 await Clients.User(idStr).SendAsync("MessageRead", messageId);
             }
         }

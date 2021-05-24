@@ -1,8 +1,10 @@
 ﻿using Application.Contracts;
+using Application.Enums;
 using Application.Extensions;
 using Application.Filters;
 using Application.Models;
 using AutoMapper;
+using AutoMapper.QueryableExtensions;
 using Domain;
 using Domain.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +23,11 @@ namespace Application.Services
         {
             _context = context;
             _mapper = mapper;
+        }
+
+        public async Task<MessageViewModel> GetMessageById(int messageId)
+        {
+            return await _context.Messages.ProjectTo<MessageViewModel>(_mapper.ConfigurationProvider).FirstOrDefaultAsync(m => m.Id == messageId);
         }
 
         public async Task<PagedList<MessageViewModel>> GetMessages(int chatId, Guid userId, int? pageNumber, int? pageSize)
@@ -42,7 +49,10 @@ namespace Application.Services
 
             var messageDictionary = messages.Items.ToDictionary(m => m.Id);
             foreach (var message in result.Items)
-                message.IsRead = message.SenderId == userId || messageDictionary[message.Id].Recepients.Any(r => r.RecepientId == userId && r.ReadTime.HasValue);
+            {
+                var recepient = messageDictionary[message.Id].Recepients.FirstOrDefault(r => message.SenderId == userId || r.RecepientId == userId);
+                message.Status = recepient == null ? MessageStatus.Sent : (recepient.ReadTime.HasValue ? MessageStatus.Read : MessageStatus.Received);
+            }
 
             return result;
         }
@@ -63,9 +73,9 @@ namespace Application.Services
             return result;
         }
 
-        public async Task ReadMessage(Guid userId, int messageId)
+        private async Task UpdateMessageStatus(Guid userId, int messageId, MessageStatus toStatus)
         {
-            if (!await _context.Messages.AnyAsync(m => m.Id == messageId && m.SenderId != userId))
+            if (toStatus == MessageStatus.Sent || !await _context.Messages.AnyAsync(m => m.Id == messageId && m.SenderId != userId))
                 return;
 
             var now = DateTimeOffset.Now;
@@ -84,8 +94,19 @@ namespace Application.Services
             if (messageStatus.ReadTime.HasValue)
                 return;
 
-            messageStatus.ReadTime = now;
+            if (toStatus == MessageStatus.Read)
+                messageStatus.ReadTime = now;
             await _context.SaveChangesAsync();
+        }
+
+        public async Task ReceiveMessage(Guid userId, int messageId)
+        {
+            await UpdateMessageStatus(userId, messageId, MessageStatus.Received);
+        }
+
+        public async Task ReadMessage(Guid userId, int messageId)
+        {
+            await UpdateMessageStatus(userId, messageId, MessageStatus.Read);
         }
     }
 }
